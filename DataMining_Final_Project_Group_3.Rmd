@@ -1,0 +1,459 @@
+---
+title: "Data Mining Final Project"
+author: "Gretchen Forbush, Lexi Lin, Quinn Johnson, Jeff Clancy"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Setup
+
+```{r}
+# Turning off warning messages and setting seed
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+set.seed(42)
+
+# Importing Relevant Libraries
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(rpart)
+library(rpart.plot)
+
+# Set working directory and read in the file
+setwd("C:/Users/Clanc/Downloads")
+data <- read.csv("Animal_Shelter_Animals.csv")
+data <- subset(data, data$speciesname %in% c("Cat", "Dog"))
+data <- subset(data, data$sexname %in% c("Male", "Female"))
+```
+
+# Cleaning
+
+## Downsizing the dataset to include only Cats & Dogs with genders Male & Female
+
+```{r}
+data <- subset(data, data$speciesname %in% c("Cat", "Dog"))
+data <- subset(data, data$sexname %in% c("Male", "Female"))
+```
+
+## Using dates to determine if animal is permenantly adopted
+
+### For Intake, Movement, Return, & Decease, changing character values to date values
+
+```{r}
+convert_to_datetime <- function(data, columns) {
+  data[columns] <- lapply(data[columns], function(x) {
+    as.POSIXct(x, format = "%m/%d/%Y %I:%M:%S %p", tz = "UTC")
+  })
+  return(data)
+}
+
+date_columns <- c("intakedate", "movementdate","returndate", "deceaseddate")
+
+data <- convert_to_datetime(data, date_columns)
+```
+
+### Getting one date for each column for each animal; if there is no return or deceased date, recieves positive adoption values
+
+```{r}
+data <- data %>%
+  group_by(id,intakereason, breedname, basecolour, speciesname, animalage, sexname) %>%
+  summarise(
+    max_intakedate = max(intakedate, na.rm = TRUE),
+    max_movementdate = max(movementdate, na.rm = TRUE),
+    max_returndate = max(returndate, na.rm = TRUE),
+    max_deceaseddate = max(deceaseddate, na.rm = TRUE)
+  )
+
+data <- data %>%
+  mutate(is_adopted = ifelse(max_returndate == -Inf & max_deceaseddate == -Inf, 1, 0))
+```
+
+## Grouping dimension values
+
+### Grouping intake reason
+
+```{r}
+categorize_intakereason <- function(reason) {
+  if (reason %in% c("Abandoned", "Abuse/neglect", "Stray", "TNR - Trap/Neuter/Release")) {
+    return("Abandonment_Stray")
+  } else if (reason %in% c("Allergies", "Medical", "Sick/Injured", "Owner Deceased", 
+                           "Owner Died", "Owner requested Euthanasia", "Rabies Monitoring", "DOA", "Return Adopt - Medical")) {
+    return("Health_Issues")
+  } else if (reason %in% c("Behavior", "Biting", "Return Adopt - Behavior", "Police Assist")) {
+    return("Behavioral_Issues")
+  } else if (reason %in% c("Incompatible with other pets", "Incompatible with owner lifestyle", 
+                           "Return Adopt - Incompatible with other pets", 
+                           "Return Adopt - Incompatible with owner lifestyle", 
+                           "Return adopt - lifestyle issue")) {
+    return("Incompatibility_Issues")
+  } else if (reason %in% c("Financial Constraints", "Housing", "Landlord issues", 
+                           "Unsuitable Accommodation", "Unable to Afford", 
+                           "Marriage/Relationship split", "Moving", 
+                           "Return Adopt - Housing", "Litter relinquishment")) {
+    return("Housing_Financial_Issues")
+  } else if (reason %in% c("Born in Shelter", 
+                           "Transfer from Other Shelter")) {
+    return("Shelter_Transfer")
+  } else {
+    return("Other_Intake_Reason")
+  }
+}
+
+data$intake_category <- sapply(data$intakereason, categorize_intakereason)
+```
+
+### Grouping basecolour
+
+```{r}
+categorize_basecolour <- function(basecolour) {
+  if (grepl("Black", basecolour, ignore.case = TRUE)) {
+    return("Black_Variants")
+  } else if (grepl("White", basecolour, ignore.case = TRUE)) {
+    return("White_Variants")
+  } else if (grepl("Grey", basecolour, ignore.case = TRUE) | grepl("Silver", basecolour, ignore.case = TRUE)) {
+    return("Grey_Silver_Variants")
+  } else if (grepl("Brown", basecolour, ignore.case = TRUE) | grepl("Buff", basecolour, ignore.case = TRUE) | grepl("Tan", basecolour, ignore.case = TRUE)) {
+    return("Brown_Tan_Variants")
+  } else if (grepl("Orange", basecolour, ignore.case = TRUE) | grepl("Red", basecolour, ignore.case = TRUE) | grepl("Apricot", basecolour, ignore.case = TRUE)) {
+    return("Orange_Red_Variants")
+  } else if (grepl("Tortie", basecolour, ignore.case = TRUE) | grepl("Calico", basecolour, ignore.case = TRUE)) {
+    return("Tortoiseshell_Calico_Variants")
+  } else if (grepl("Blue", basecolour, ignore.case = TRUE)) {
+    return("Blue_Variants")
+  } else if (grepl("Seal", basecolour, ignore.case = TRUE)) {
+    return("Seal_Variants")
+  } else if (grepl("Point", basecolour, ignore.case = TRUE)) {
+    return("Point_Variants")
+  } else if (grepl("Tabby", basecolour, ignore.case = TRUE)) {
+    return("Tabby_Variants")
+  } else if (grepl("Brindle", basecolour, ignore.case = TRUE)) {
+    return("Brindle_Variants")
+  } else if (grepl("Yellow", basecolour, ignore.case = TRUE) | grepl("Golden", basecolour, ignore.case = TRUE)) {
+    return("Yellow_Golden_Variants")
+  } else if (basecolour == "Various") {
+    return("Mixed_Variants")
+  } else {
+    return("Other_Colour")
+  }
+}
+
+data$colour_category <- sapply(data$basecolour, categorize_basecolour)
+```
+
+### Grouping breed
+
+```{r}
+categorize_breed <- function(breed) {
+  if (grepl("Domestic Short Hair", breed, ignore.case = TRUE)) {
+    return("Domestic_Short_Hair")
+  } else if (grepl("Domestic Medium Hair", breed, ignore.case = TRUE)) {
+    return("Domestic_Medium_Hair")
+  } else if (grepl("Domestic Long Hair", breed, ignore.case = TRUE)) {
+    return("Domestic_Long_Hair")
+  } else if (grepl("Retriever", breed, ignore.case = TRUE)) {
+    return("Retrievers")
+  } else if (grepl("Terrier", breed, ignore.case = TRUE)) {
+    return("Terriers")
+  } else if (grepl("Shepherd|Collie|Cattle Dog|Herding|Border", breed, ignore.case = TRUE)) {
+    return("Herding_Dogs")
+  } else if (grepl("Bulldog", breed, ignore.case = TRUE)) {
+    return("Bulldogs")
+  } else if (grepl("Chihuahua|Pomeranian|Toy", breed, ignore.case = TRUE)) {
+    return("Toy_Breeds")
+  } else if (grepl("Mix", breed, ignore.case = TRUE) | grepl("/", breed, ignore.case = TRUE)) {
+    return("Mixed_Breeds")
+  } else {
+    return("Other_Breed")
+  }
+}
+
+data$breed_category <- sapply(data$breedname, categorize_breed)
+```
+
+## Calculating Animal Age at Intake and Adoption
+
+### Transforming Animal Age at Intake
+
+```{r}
+# Function to convert animal age to numeric value in years
+convert_animal_age <- function(age_string) {
+  # Handle weeks
+  if (grepl("week", age_string, ignore.case = TRUE)) {
+    weeks <- as.numeric(gsub(" .*", "", age_string))
+    return(weeks / 52)
+  }
+  
+  # Handle months
+  if (grepl("^\\d+\\s*month", age_string, ignore.case = TRUE)) {
+    months <- as.numeric(gsub(" .*", "", age_string))
+    return(months / 12)
+  }
+  
+  # Handle years and months
+  if (grepl("\\d+\\s*year", age_string, ignore.case = TRUE) & grepl("\\d+\\s*month", age_string, ignore.case = TRUE)) {
+    years <- as.numeric(gsub("\\s*year.*", "", age_string))
+    months <- as.numeric(gsub(".*\\s*(\\d+)\\s*month.*", "\\1", age_string))
+    return(years + (months / 12))
+  }
+  
+  # Handle years only
+  if (grepl("year", age_string, ignore.case = TRUE)) {
+    years <- as.numeric(gsub(" .*", "", age_string))
+    return(years)
+  }
+  
+  # Return NA if no recognizable pattern
+  return(NA)
+}
+
+# Apply the conversion function to the animalage column
+data <- data %>%
+  mutate(animalage_numeric = sapply(animalage, convert_animal_age))
+
+# Rounding values for readability
+data$animalage_numeric <- round(data$animalage_numeric,2)
+
+# Removing animals that are older than 20
+data <- subset(data, data$animalage_numeric < 20)
+```
+
+#### Histogram of Animal Age at Intake
+
+```{r}
+hist(data$animalage_numeric,
+     breaks = 20,
+     main = "Histogram of Animal Age at Intake (in Years)",
+     xlab = "Age (Years)",
+     col = "lightblue",
+     border = "black")
+```
+
+### Calculting years in shelter and age at adoption
+
+```{r}
+# Making sure the dates are type date
+data$max_intakedate <- as.Date(data$max_intakedate)
+data$max_movementdate <- as.Date(data$max_movementdate)
+
+# Using date difference to calculate years in shelter
+data$years_in_shelter <- as.numeric(difftime(data$max_movementdate, data$max_intakedate, units = "days")) / 365
+data$years_in_shelter <- round(data$years_in_shelter,2)
+
+# Calculating age at adoption
+data$age_at_adoption <- data$animalage_numeric + data$years_in_shelter
+
+# Removing values were age at adoption was not a number or greater than 20
+data <- subset(data, data$age_at_adoption != -Inf)
+data <- subset(data, data$age_at_adoption < 20)
+```
+
+#### Histogram of Years in Shelter
+
+```{r}
+hist(data$years_in_shelter,
+     breaks = 15,
+     main = "Histogram of Animal Years in Shelter",
+     xlab = "Age (Years)",
+     col = "lightblue",
+     border = "black")
+```
+
+#### Histogram of Animal Age at Adoption
+
+```{r}
+hist(data$age_at_adoption,
+     breaks = 20,
+     main = "Histogram of Animal Age at Adoption (in Years)",
+     xlab = "Age (Years)",
+     col = "lightblue",
+     border = "black")
+```
+
+## Taking a look at how many rows are found for each dimension value
+
+```{r}
+count_unique_values <- function(data, column_name) {
+  column_sym <- sym(column_name)
+  result <- data %>%
+    group_by(!!column_sym) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count))
+  
+  return(result)
+}
+
+count_unique_values(data, "is_adopted")
+count_unique_values(data, "intake_category")
+count_unique_values(data, "colour_category")
+count_unique_values(data, "breed_category")
+count_unique_values(data, "speciesname")
+count_unique_values(data, "sexname")
+```
+
+## Removing original columns to reach final dataset before dummy variables created
+
+```{r}
+data <- data[,c("is_adopted", "intake_category","colour_category","breed_category", "sexname", "speciesname", "animalage_numeric", "years_in_shelter", "age_at_adoption")]
+```
+
+## Creating dummy variables for each dimension value
+
+```{r}
+# Formula to create columns for each dimension value
+create_dummies <- function(data, column) {
+  dummies <- model.matrix(~ . + 0, data = data.frame(data[[column]]))
+  colnames(dummies) <- paste(column, gsub("^.*\\]", "", colnames(dummies)), sep = "_")
+  return(as.data.frame(dummies))
+}
+
+# Apply the function to each specified column and bind the results
+data <- cbind(
+  data,
+  create_dummies(data, "intake_category"),
+  create_dummies(data, "colour_category"),
+  create_dummies(data, "breed_category"),
+  create_dummies(data, "sexname"),
+  create_dummies(data, "speciesname")
+)
+
+# Function to clean the columns names
+clean_column_names <- function(column_names) {
+  clean_names <- gsub(".*\\_data\\.\\.column\\.\\.", "", column_names)
+  return(clean_names)
+}
+
+# Applying the function to the column names of the dataframe
+colnames(data) <- clean_column_names(colnames(data))
+
+# Dropping the original columns
+data <- data[, !names(data) %in% c("intake_category", "colour_category", "breed_category", "sexname", "speciesname")]
+```
+
+## Establishing Train and Test dataframes
+
+```{r}
+n <- nrow(data)
+train_size <- floor(0.7 * n)
+train_indices <- sample(seq_len(n), size = train_size)
+data.train <- data[train_indices, ]
+data.test <- data[-train_indices, ]
+```
+
+# Logistic Regression
+
+## Running a base logistic regression model
+
+```{r}
+model <- glm(is_adopted ~ ., 
+             data = data.train, 
+             family = binomial)
+
+summary(model)
+```
+
+## Using the step function to optimize model
+
+```{r}
+#step_model <- step(model,direction="both")
+
+#step_model$call
+```
+
+## Running the final model based on the output from the step function
+
+```{r}
+final_model <- glm(formula = is_adopted ~ animalage_numeric + years_in_shelter + 
+    Abandonment_Stray + Behavioral_Issues + Health_Issues + Housing_Financial_Issues + 
+    Incompatibility_Issues + Other_Intake_Reason + Black_Variants + 
+    Brindle_Variants + Brown_Tan_Variants + Mixed_Variants + 
+    Other_Colour + Seal_Variants + White_Variants + Domestic_Medium_Hair + 
+    Domestic_Short_Hair + Mixed_Breeds + Female + Toy_Breeds, 
+    family = binomial, data = data.train)
+
+summary(final_model)
+```
+
+```{r}
+# Predicting on training data
+train_predictions <- predict(final_model, newdata = data.train, type = "response")
+train_pred_labels <- ifelse(train_predictions > 0.5, 1, 0)  
+
+# Predicting on test data
+test_predictions <- predict(final_model, newdata = data.test, type = "response")
+test_pred_labels <- ifelse(test_predictions > 0.5, 1, 0)  
+
+# Generating confusion matrix for training data
+train_confusion_matrix <- confusionMatrix(factor(train_pred_labels), factor(data.train$is_adopted))
+print("Confusion Matrix for Training Data:")
+print(train_confusion_matrix)
+
+# Generating confusion matrix for test data
+test_confusion_matrix <- confusionMatrix(factor(test_pred_labels), factor(data.test$is_adopted))
+print("Confusion Matrix for Test Data:")
+print(test_confusion_matrix)
+```
+
+# Classification Tree
+
+## Building the full tree
+
+```{r}
+full_tree <- rpart(is_adopted ~ ., data = data.train, method = "class", 
+                   control = rpart.control(minsplit = 30, cp = 0, xval = 10))
+```
+
+## Graphing the complexity parameter against the cross validated error
+
+```{r}
+# Showing the complexity parameter table
+printcp(full_tree)
+
+# Plotting the complexity parameter against the cross validated error
+plotcp(full_tree)
+```
+
+## Creating the pruned tree
+
+```{r}
+# Finding the optimal cp value that minimizes cross-validated error
+optimal_cp <- full_tree$cptable[which.min(full_tree$cptable[,"xerror"]),"CP"]
+
+# Finding the optimal cp value that minimizes cross-validated error
+pruned_tree <- prune(full_tree, cp = optimal_cp)
+```
+
+```{r}
+# Establishing the settings for the image
+png(filename = "pruned_tree.png", width = 3000, height = 2000, res = 300)
+
+# Ploting the pruned tree
+rpart.plot((pruned_tree),type=2,extra=101,tweak=1.3)
+
+# Closing the device to save the file
+invisible(dev.off())
+
+# Including the saved image
+knitr::include_graphics("pruned_tree.png")
+```
+
+```{r}
+# Predicting the outcome based on the pruned tree
+predictions_pruned_train <- predict(pruned_tree, data.train, type = "class")
+predictions_pruned_test <- predict(pruned_tree, data.test, type = "class")
+
+# Convert predictions to factors
+predictions_pruned_train <- factor(predictions_pruned_train, levels = c(0, 1))
+predictions_pruned_test <- factor(predictions_pruned_test, levels = c(0, 1))
+
+# Converting the actuals to factors
+actual_is_adopted_train <- factor(data.train$is_adopted, levels = c(0, 1))
+actual_is_adopted_test <- factor(data.test$is_adopted, levels = c(0, 1))
+
+# Generating the confusion matrixes
+confusion_matrix_pruned_train <- confusionMatrix(predictions_pruned_train, actual_is_adopted_train)
+confusion_matrix_pruned_test <- confusionMatrix(predictions_pruned_test, actual_is_adopted_test)
+
+# View the confusion matrices
+print(confusion_matrix_pruned_train)
+print(confusion_matrix_pruned_test)
+```
