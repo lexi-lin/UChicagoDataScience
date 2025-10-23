@@ -13,5 +13,5 @@ Feel free to explore the repositories linked below or cloned here for a deeper d
 The content and code here are provided for educational and demonstration purposes only. They are not intended for production use or commercial applications. Please respect any data privacy guidelines and licenses associated with third-party datasets.
 If you fork or use any part of these projects, I'd appreciate attribution back to this repository.
 Contact
-If you have questions, feedback, or collaboration ideas, feel free to reach out via email (lexilin4263@gmail.com) or connect on LinkedIn (www.linkedin.com/in/yijie-lexi-lin).
+If you have questions, feedback, or collaboration ideas, feel free to reach out via email or connect on <a href=www.linkedin.com/in/yijie-lexi-lin>LinkedIn</a>.
 Thanks for visiting! 🚀
